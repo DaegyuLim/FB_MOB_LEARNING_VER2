@@ -159,27 +159,27 @@ class CustomTRANSFORMER(nn.Module):
         cnt = 0
  
         #### free motion only test data ###
-        for inputs, outputs, outputs_pre in testloader:
-            inputs = inputs.to(self._device)
-            outputs = outputs.to(self._device)
-            outputs_pre =outputs_pre.to(self._device)
+        # for inputs, outputs, outputs_pre in testloader:
+        #     inputs = inputs.to(self._device)
+        #     outputs = outputs.to(self._device)
+        #     outputs_pre =outputs_pre.to(self._device)
 
-            if(self.config.getint("data", "seqeunce_length") == 1):
-                mean, var, hidden = self.forwardGaussian2(inputs, hidden)
-            else:
-                mean, var = self.forwardGaussian(inputs, outputs_pre)
+        #     if(self.config.getint("data", "seqeunce_length") == 1):
+        #         mean, var, hidden = self.forwardGaussian2(inputs, hidden)
+        #     else:
+        #         mean, var = self.forwardGaussian(inputs, outputs_pre)
 
-            cnt += 1
+        #     cnt += 1
              
-            test_loss = nn.GaussianNLLLoss()(mean, outputs, var)
-            temp = np.concatenate( (self._to_numpy(mean), self._to_numpy(var)), axis=1)
-            predictions.extend(temp)
-            residuals.extend(np.abs(self._to_numpy(mean)-self._to_numpy(outputs)))
-            test_losses.append(self._to_numpy(test_loss))
-        print("TEST count: ", cnt)
-        print("Test Loss: ", np.mean(test_losses)) 
-        print("inputs.shape: ", inputs.shape)
-        print("outputs.shape: ", outputs.shape)
+        #     test_loss = nn.GaussianNLLLoss()(mean, outputs, var)
+        #     temp = np.concatenate( (self._to_numpy(mean), self._to_numpy(var)), axis=1)
+        #     predictions.extend(temp)
+        #     residuals.extend(np.abs(self._to_numpy(mean)-self._to_numpy(outputs)))
+        #     test_losses.append(self._to_numpy(test_loss))
+        # print("TEST count: ", cnt)
+        # print("Test Loss: ", np.mean(test_losses)) 
+        # print("inputs.shape: ", inputs.shape)
+        # print("outputs.shape: ", outputs.shape)
 
         # np.savetxt(result_directory+"testing_result.csv", predictions, delimiter=",")
         
@@ -202,8 +202,10 @@ class CustomTRANSFORMER(nn.Module):
             
             for inputs, outputs, outputs_pre in test_collision_loader:
                 inputs = inputs.to(self._device)
+                outputs = outputs.to(self._device)
+                outputs_pre = outputs_pre.to(self._device)
                 if iteration == 0:
-                    self.outputs_pre = outputs_pre.to(self._device)
+                    self.outputs_pre = outputs_pre
 
                 if(self.config.getint("data", "seqeunce_length") == 1):
                     # print("TEST COLLISION hidden: ", hidden)
@@ -214,7 +216,7 @@ class CustomTRANSFORMER(nn.Module):
                     # preds = self.forwardGaussian(inputs)
                     mean, var = self.forwardGaussian(inputs, self.outputs_pre)
                 
-                self.outputs_pre = mean.reshape(:, 1, 6)
+                self.outputs_pre = mean.reshape(-1, 1, 6)
                 # predictions.extend(self._to_numpy(preds))
                 temp = np.concatenate( (self._to_numpy(mean), self._to_numpy(var)), axis=1)
                 predictions.extend(temp)

@@ -14,6 +14,7 @@ from gru.gru import CustomGRU
 from mlp.mlp import CustomMLP
 from rnn.rnn import CustomRNN
 from tcn.tcn import TemporalConvNet
+from transformer.transformer import CustomTRANSFORMER
 
 def argparser():
     """
@@ -78,7 +79,10 @@ def run(config, testloader, test_collision_loader, devloader=None):
     elif network_type == "TCN":
         print('TCN is used')
         nn_training = TemporalConvNet(config, checkpoint_directory)    
-    
+    elif network_type == "TRANSFORMER":
+        print('TRANSFORMER is used')
+        nn_training = CustomTRANSFORMER(config, checkpoint_directory)
+ 
     nn_training.restore_model(config['paths']['checkpoints_restore_directory'])
     
     nn_training.to(config['device']['device'])

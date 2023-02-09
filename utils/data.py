@@ -36,7 +36,8 @@ class FrictionDataset(Dataset):
             elif self.network == "TRANSFORMER":
                 labels = labels.reshape(1, 6)
                 labels_pre = torch.from_numpy( self._data[idx,self.seq_len*self.n_input_feat+6:self.seq_len*self.n_input_feat+12].reshape(1, 6)).float()
-        return inputs, labels, labels_pre
+                return inputs, labels, labels_pre
+        return inputs, labels
 
     @property
     def input_dim_(self):

@@ -185,7 +185,7 @@ class CustomGRU(nn.Module):
         # np.savetxt(result_directory+"testing_result.csv", predictions, delimiter=",")
         
         # threshold
-        self.calculate_threshold_gaussian(testloader)
+        # self.calculate_threshold_gaussian(testloader)
 
         # collision_pred = torch.zeros(len(residuals))
 
