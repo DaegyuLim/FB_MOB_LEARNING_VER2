@@ -14,19 +14,20 @@ from torch.optim.lr_scheduler import LinearLR
 from torch.nn import functional as F
 from torch.nn.utils import spectral_norm as SN
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
-from torch.autograd.functional import jacobian as J
-from torch import linalg
 import wandb
+from configparser import ConfigParser
+
+from gru.gru import CustomGRU
 
 
 
-class CustomGRU(nn.Module):
+class CustomConcatPelv(nn.Module):
     """
     VAE, x --> mu, log_sigma_sq --> N(mu, log_sigma_sq) --> z --> x
     """
 
     def __init__(self, config, checkpoint_directory):
-        super(CustomGRU, self).__init__()
+        super(CustomConcatPelv, self).__init__()
         self.config = config
         
         self._device = config['device']['device']
@@ -39,71 +40,106 @@ class CustomGRU(nn.Module):
 
         self.lr_schedule = config.getboolean("training", "lr_schedule")
 
-        self.input_lip = config.getfloat('model', 'input_lipschitz')
-        self.hidden_lip = config.getfloat('model', 'hidden_lipschitz')
-
         self.model_name = '{}{}'.format(config['model']['name'], config['model']['config_id'])
-        
-        gru_structure_config_dict = {'input_size': self.config.getint("data", "n_input_feature"),
+
+        gru_structure_config_dict = {'input_size': 12,
         'hidden_size': self.config.getint("model", "hidden_size"),
         'num_layers': self.config.getint("model", "num_layers"),
         'bias': self.config.getboolean("model", "bias"),
         'batch_first': self.config.getboolean("model", "batch_first"),
         'dropout': self.config.getfloat("model", "dropout"),
         'bidirectional': self.config.getboolean("model", "bidirectional")}
+
+        # self.config_left_leg = ConfigParser()
+
+        self.config_left_leg = config
+        self.config_left_leg.set("data", "n_input_feature", "30")
+        self.config_left_leg.set("model","hidden_size", "150")
+        self.config_left_leg.set("data", "n_output", "12")
+        self.gru_left_leg = CustomGRU(self.config_left_leg, checkpoint_directory)
+
+        self.config_right_leg = config
+        self.config_right_leg.set("data", "n_input_feature", "30")
+        self.config_right_leg.set("model","hidden_size", "150")
+        self.config_right_leg.set("data", "n_output", "12")
+        self.gru_right_leg = CustomGRU(self.config_right_leg, checkpoint_directory)
         
+        self.config_left_arm = config
+        self.config_left_arm.set("data", "n_input_feature", "34")
+        self.config_left_arm.set("model","hidden_size", "200")
+        self.config_left_arm.set("data", "n_output", "22")
+        self.gru_left_arm = CustomGRU(self.config_left_arm, checkpoint_directory)
+
+
+        self.config_right_arm = config
+        self.config_right_arm["data"]["n_input_feature"] = "34"
+        self.config_right_arm["model"]["hidden_size"] = "200"
+        self.config_right_arm["data"]["n_output"] = "22"
+        self.gru_right_arm = CustomGRU(self.config_right_arm, checkpoint_directory)
+
+        self.gru_left_leg.restore_model('./checkpoints/left_leg_intentional_torque_tocabi_50step_1000hz_1e6/TRO_experiment00/2023_03_21_11_02/epoch_200-f1_-1.2823306322097778.pt')
+        self.gru_right_leg.restore_model('./checkpoints/right_leg_intentional_torque_tocabi_50step_1000hz_1e6/TRO_experiment_bat_size_6400/2023_03_20_11_15/epoch_200-f1_-1.3669029474258423.pt')
+        self.gru_left_arm.restore_model('./checkpoints/left_arm_intentional_torque_tocabi_q_qdot_50step_1000hz_1e6/TRO_experiment_h200_00/2023_03_27_16_09/epoch_200-f1_-0.8752208948135376.pt')
+        self.gru_right_arm.restore_model('./checkpoints/right_arm_intentional_torque_tocabi_q_qdot_50step_1000hz_1e6/TRO_experiment_h200_01/2023_03_29_16_40/epoch_200-f1_-1.0931440591812134.pt')
+        
+        for name, param in self.gru_left_leg.named_parameters():
+            param.requires_grad_(False)
+            print(name, " is freezed")
+        for name, param in self.gru_right_leg.named_parameters():
+            param.requires_grad_(False)
+            print(name, " is freezed")
+        for name, param in self.gru_left_arm.named_parameters():
+            param.requires_grad_(False)
+            print(name, " is freezed")
+        for name, param in self.gru_right_arm.named_parameters():
+            param.requires_grad_(False)
+            print(name, " is freezed")
+
+        # self.gru_left_leg.gru.requires_grad(False)
+        # self.gru_right_leg.gru.requires_grad(False)
+        # self.gru_left_arm.gru.requires_grad(False)
+        # self.gru_right_arm.gru.requires_grad(False)
+
+        # self.gru_left_leg.linear.requires_grad(False)
+        # self.gru_right_leg.linear.requires_grad(False)
+        # self.gru_left_arm.linear.requires_grad(False)
+        # self.gru_right_arm.linear.requires_grad(False)
 
         self.softplus = nn.Softplus()
         self.tanh = nn.Tanh()
-        # self.sigmoid = nn.Sigmoid()
 
-        # self.linear_ir = nn.Linear(gru_structure_config_dict["hidden_size"], gru_structure_config_dict["input_size"])
-        # self.linear_iz = nn.Linear(gru_structure_config_dict["hidden_size"], gru_structure_config_dict["input_size"])
-        # self.linear_in = nn.Linear(gru_structure_config_dict["hidden_size"], gru_structure_config_dict["input_size"])
-
-        # self.linear_hr = nn.Linear(gru_structure_config_dict["hidden_size"], gru_structure_config_dict["hidden_size"])
-        # self.linear_hz = nn.Linear(gru_structure_config_dict["hidden_size"], gru_structure_config_dict["hidden_size"])
-        # self.linear_hn = nn.Linear(gru_structure_config_dict["hidden_size"], gru_structure_config_dict["hidden_size"])
-
-        # self.r = torch.zeros(gru_structure_config_dict["hidden_size"])
-        # self.z = torch.zeros(gru_structure_config_dict["hidden_size"])
-        # self.n = torch.zeros(gru_structure_config_dict["hidden_size"])
-        # self.h = torch.zeros(gru_structure_config_dict["hidden_size"])
         # torch.autograd.set_detect_anomaly(True)
 
         if(self.config.getboolean("model", "spectral_normalization")):
+            self.mlp_output = nn.Sequential(
+            SN(nn.Linear(760, 128)),
+            nn.Tanh(),
+            SN(nn.Linear(128, 64)),
+            nn.Tanh(),
+            SN(nn.Linear(64, 12))
+            )
             self.gru = SN(nn.GRU(**gru_structure_config_dict), name="weight_hh_l0")
             self.gru = SN(self.gru, name="weight_ih_l0")
-            # self.gru = nn.GRU(**gru_structure_config_dict)
-            # self.linear_ir = SN(self.linear_ir)
-            # self.linear_iz = SN(self.linear_iz)
-            # self.linear_in = SN(self.linear_in)
-            # self.linear_hr = SN(self.linear_hr)
-            # self.linear_hz = SN(self.linear_hz)
-            # self.linear_hn = SN(self.linear_hn)
 
-            self.linear = SN(nn.Linear(gru_structure_config_dict["hidden_size"], self.config.getint("data", "n_output")))
-            # self.linear = nn.Linear(gru_structure_config_dict["hidden_size"], self.config.getint("data", "n_output"))
             print("SN is applied")
-            # print(self.gru)
-            print(self.linear)
+            print(self.mlp_output)
         else:
-            self.gru = nn.GRU(**gru_structure_config_dict)
-            self.linear = nn.Linear(gru_structure_config_dict["hidden_size"], self.config.getint("data", "n_output"))
+            self.mlp_output = nn.Sequential(
+            nn.Linear(760, 128),
+            nn.Tanh(),
+            nn.Linear(128, 64),
+            nn.Tanh(),
+            nn.Linear(64, 12)
+            )
         
-        # self.mlp_output = nn.Sequential(
-        #     nn.Linear(gru_structure_config_dict["hidden_size"], 128),
-        #     nn.Tanh(),
-        #     nn.Linear(128, 64),
-        #     nn.Tanh(),
-        #     nn.Linear(64, self.config.getint("data", "n_output"))
-        #     )
-
         self._optim = optim.Adam(
             self.parameters(),
             lr=config.getfloat('training', 'lr'),
             betas=json.loads(config['training']['betas'])
         )
+
+        for name, param in self.mlp_output.named_parameters():
+            print(name, "'s param.requires_grad: ", param.requires_grad)
         # self._optim = optim.SGD(self.parameters(), lr=config.getfloat('training', 'lr'), momentum=0.9)
 
     def forward(self, X):
@@ -119,69 +155,51 @@ class CustomGRU(nn.Module):
         return predictions, h_out
 
     def forwardGaussian(self, X):
+        self.gru_left_leg.gru.flatten_parameters()
+        self.gru_right_leg.gru.flatten_parameters()
+        self.gru_left_arm.gru.flatten_parameters()
+        self.gru_right_arm.gru.flatten_parameters()
         self.gru.flatten_parameters()
-        gru_out, _ = self.gru(torch.mul(X,self.input_lip))
 
-        # self.h = torch.zeros(1, X.shape[0], self.config.getint("model", "hidden_size"))
-        # self.h = self.h.to(self._device)
-        # # print('X.shape:', X.shape)
-        # for i in range(X.shape[1]):
-        #     _, self.h = self.gru(X[:, i:i+1, :]*self.input_lip, self.h*self.hidden_lip)
+        gru_imu_out, _ = self.gru(X[:, :, 18:30])
+        gru_left_leg_out, _ = self.gru_left_leg.gru(X[:, :, 0:30])
+        gru_right_leg_out, _ = self.gru_right_leg.gru(X[:, :, 30:60])
+        gru_left_arm_out, _ = self.gru_left_arm.gru(X[:, :, 60:94])
+        gru_right_arm_out, _ = self.gru_right_arm.gru(X[:, :, 94:128])
 
-        # gru_out = self.h[-1,:,:]
-        predictions = self.linear(gru_out[:,-1,:])
+        gru_output_cat = torch.cat( (gru_imu_out[:,-1,:], gru_left_leg_out[:,-1,:], gru_right_leg_out[:,-1,:], gru_left_arm_out[:,-1,:], gru_right_arm_out[:,-1,:]), 1)
+        predictions = self.mlp_output(gru_output_cat)
+        
         # mean = self.tanh(predictions[:, 0:int(self.n_output/2)])
         # mean = torch.mul(mean, 3)
 
         # predictions = self.mlp_output(gru_out[:,-1,:])
-        mean = predictions[:, 0:int(self.n_output/2)]
-        var = self.softplus(predictions[:, int(self.n_output/2):self.n_output]) # vars
+        mean = predictions[:, 0:6]
+        var = self.softplus(predictions[:, 6:12]) # vars
         return mean, var
 
     def forwardGaussian2(self, X, h):
+        self.gru_left_leg.gru.flatten_parameters()
+        self.gru_right_leg.gru.flatten_parameters()
+        self.gru_left_arm.gru.flatten_parameters()
+        self.gru_right_arm.gru.flatten_parameters()
         self.gru.flatten_parameters()
-        gru_out, h_out = self.gru(torch.mul(X,self.input_lip), torch.mul(h,self.hidden_lip))
-        predictions = self.linear(gru_out[:,-1,:])
-        # mean = self.tanh(predictions[:, 0:int(self.n_output/2)])
-        # mean = torch.mul(mean, 2)
 
-        # predictions = self.mlp_output(gru_out[:,-1,:])
-        mean = predictions[:, 0:int(self.n_output/2)]
-        var = self.softplus(predictions[:, int(self.n_output/2):self.n_output]) # vars
-        # predictions[int(self.n_output/2):self.n_output] = self.softplus(predictions[int(self.n_output/2):self.n_output]) # vars
-        return mean, var, h_out
+        gru_imu_out, h_imu_out = self.gru(X[:, :, 18:30], h[:, :, 700:760])
 
-    def forwardGaussian3(self, X):
-        self.gru.flatten_parameters()
-        gru_out, h_out = self.gru(torch.mul(X,self.input_lip))
+        gru_left_leg_out, h_left_leg_out = self.gru_left_leg.gru(X[:, :, 0:30], h[:, :, 0:150])
+        gru_right_leg_out, h_right_leg_out = self.gru_right_leg.gru(X[:, :, 30:60], h[:, :, 150:300])
+        gru_left_arm_out, h_left_arm_out = self.gru_left_arm.gru(X[:, :, 60:94], h[:, :, 300:500])
+        gru_right_arm_out, h_right_arm_out = self.gru_right_arm.gru(X[:, :, 94:128], h[:, :, 500:700])
+        
+        gru_output_cat = torch.cat( (gru_imu_out[:,-1,:], gru_left_leg_out[:,-1,:], gru_right_leg_out[:,-1,:], gru_left_arm_out[:,-1,:], gru_right_arm_out[:,-1,:]), 1)
 
-        # self.h = torch.zeros(1, X.shape[0], self.config.getint("model", "hidden_size"))
-        # self.h = self.h.to(self._device)
-        # # print('X.shape:', X.shape)
-        # for i in range(X.shape[1]):
-        #     _, self.h = self.gru(X[:, i:i+1, :]*self.input_lip, self.h*self.hidden_lip)
+        h_output_cat = torch.cat( (h_left_leg_out, h_right_leg_out, h_left_arm_out, h_right_arm_out, h_imu_out), 2)
+        predictions = self.mlp_output(gru_output_cat)
 
-        # gru_out = self.h[-1,:,:]
-        predictions = self.linear(gru_out[:,-1,:])
-        # mean = self.tanh(predictions[:, 0:int(self.n_output/2)])
-        # mean = torch.mul(mean, 3)
-
-        # predictions = self.mlp_output(gru_out[:,-1,:])
-        mean = predictions[:, 0:int(self.n_output/2)]
-        var = self.softplus(predictions[:, int(self.n_output/2):self.n_output]) # vars
-        return mean, var, h_out
-
-    def GRUJacobian(self, h):
-        self.gru.flatten_parameters()
-        gru_out, h_out = self.gru(self.X_temp, h)
-        # predictions = self.linear(gru_out[:,-1,:])
-        return h_out[0,0,:]
-
-    def GRUJacobian2(self, x):
-        self.gru.flatten_parameters()
-        gru_out, h_out = self.gru(x, self.hidden)
-        predictions = self.linear(gru_out)
-        return predictions
+        mean = predictions[:, 0:6]
+        var = self.softplus(predictions[:, 6:12]) # vars
+        return mean, var, h_output_cat
 
     def _to_numpy(self, tensor):
         return tensor.data.cpu().numpy()
@@ -203,6 +221,7 @@ class CustomGRU(nn.Module):
             #         lr=self.config.getfloat('training', 'lr'),
             #         betas=json.loads(self.config['training']['betas'])
             #     )
+
             # temporary storage
             train_losses = []
             batch = 0
@@ -215,7 +234,6 @@ class CustomGRU(nn.Module):
                 # mean = predictions[:, 0:int(self.n_output/2)]
                 # var = predictions[:, int(self.n_output/2):self.n_output]
                 mean, var = self.forwardGaussian(inputs)
-
                 train_loss = nn.GaussianNLLLoss()(mean, outputs, var)
                 train_loss.backward(retain_graph=False)
                 self._optim.step()
@@ -254,9 +272,9 @@ class CustomGRU(nn.Module):
         hidden_size = self.config.getint("model", "hidden_size")
         batch_size = self.config.getint("training", "batch_size")
         result_directory = self.config.get("paths", "results_directory")
-        collision_type = self.config.get("paths", "collision_type")
 
-        self.hidden = torch.zeros(1, batch_size, hidden_size)
+
+        self.hidden = torch.zeros(1, batch_size, 760)
         self.hidden = self.hidden.to(self._device)
         cnt = 0
 
@@ -301,43 +319,21 @@ class CustomGRU(nn.Module):
         # collision test data
         if test_collision_loader is not None:
             predictions = []
-            h_data = []
-            j_norm_dh_dh =0
-            j_norm_dy_dx =0
             for inputs, outputs in test_collision_loader:
                 inputs = inputs.to(self._device)
-                self.hidden_prev = self.hidden
-                # print('inputs.shape: ', inputs.shape)
+
                 if(self.config.getint("data", "seqeunce_length") == 1):
+                    # print("TEST COLLISION hidden: ", hidden)
+                    # print("TEST COLLISION cell: ", cell)
+                    # preds, hidden, cell = self.forwardGaussian2(inputs, hidden, cell)
                     mean, var, self.hidden = self.forwardGaussian2(inputs, self.hidden)
                 else:
                     # preds = self.forwardGaussian(inputs)
-                    mean, var, self.hidden = self.forwardGaussian3(inputs)
+                    mean, var = self.forwardGaussian(inputs)
                 # predictions.extend(self._to_numpy(preds))
-                
-                ##### JACOBIAN NORM ####
-                # print(inputs.shape)
-                # x = torch.cat((inputs, self.hidden), 2)
-
-                # self.X_temp = inputs
-                # hidden_test = self.GRUJacobian(self.hidden_prev)
-                # print("self.hidden_prev shape: ", self.hidden_prev.shape)
-                # jacobian_test = J(self.GRUJacobian, self.hidden_prev)
-                # # j_norm_dh_dh = linalg.norm(jacobian_test, ord=2, dim=(2,5))
-                # # print("Weight Norm Max (W_ih, W_hh, W_linear): ",  torch.linalg.matrix_norm(self.gru.weight_hh_l0, 2),  torch.linalg.matrix_norm(self.gru.weight_ih_l0, 2),  torch.linalg.matrix_norm(self.linear.weight, 2))
-                # # j_norm_dh_dh = linalg.norm(jacobian_test[:,0,0,:], ord=2)
-                # j_norm_dh_dh = linalg.matrix_norm(jacobian_test[:,0,0,:], 2)
-                # print("Jacobian size: ", jacobian_test.shape)
-                # print("Jacobian norm: ", j_norm_dh_dh)
-                
-                # jacobian_test = J(self.GRUJacobian2, inputs)
-                # j_norm_dy_dx += linalg.norm(jacobian_test, ord=2, dim=(2,5))
-                #######################################
-
                 temp = np.concatenate( (self._to_numpy(mean), self._to_numpy(var)), axis=1)
                 predictions.extend(temp)
                 
-                # h_data.extend(self._to_numpy(self.hidden))
                 iteration +=1
 
             print("TEST COLLISION interation: ", iteration)
@@ -345,16 +341,11 @@ class CustomGRU(nn.Module):
             print("inputs.shape: ", inputs.shape)
             print("outputs.shape: ", outputs.shape)
             print("predictionslast.shape: ", len(predictions))
-            # print("hidden.shape: ", hidden.shape)
-
-            # print("avg Jacobian norm (dh/dh): ", j_norm_dh_dh/interation)
-            # print("avg Jacobian norm (dh/dx): ",  j_norm_dy_dx/interation)
 
             if(self.config.getint("data", "seqeunce_length") == 1):
-                np.savetxt(result_directory+"testing_result_collision_singlestep_"+collision_type+".csv", predictions, delimiter=",")
+                np.savetxt(result_directory+"testing_result_collision_singlestep.csv", predictions, delimiter=",")
             else:
-                np.savetxt(result_directory+"testing_result_collision_"+collision_type+".csv", predictions, delimiter=",")
-                # np.savetxt(result_directory+"testing_result_collision_"+collision_type+"_hidden.csv", h_data, delimiter=",")
+                np.savetxt(result_directory+"testing_result_collision.csv", predictions, delimiter=",")
 
     def evaluate(self, validationloader):
         """
@@ -444,13 +435,9 @@ class CustomGRU(nn.Module):
     def print_parameters_as_txt(self):
         file_directory = "./result/weights/"
 
-        for name, param in self.gru.named_parameters():
+        for name, param in self.mlp_output.named_parameters():
             if param.requires_grad:
-                np.savetxt(file_directory+"gru_"+name+".txt", param.data)
-
-        for name, param in self.linear.named_parameters():
-            if param.requires_grad:
-                np.savetxt(file_directory+"linear_"+name+".txt", param.data)
+                np.savetxt(file_directory+"mlp_output_"+name+".txt", param.data)
 
         # np.savetxt(file_directory+"gru_weight_hh_l0", self.gru.weight_hh_l0.data)
         # np.savetxt(file_directory+"gru_weight_ih_l0", self.gru.weight_ih_l0.data)

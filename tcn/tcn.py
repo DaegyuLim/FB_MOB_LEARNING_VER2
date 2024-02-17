@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-Pytorch Variational Autoendoder Network Implementation
+Pytorch TCN Network Implementation
 """
 from itertools import chain
 import time
@@ -15,6 +15,7 @@ from torch.nn import functional as F
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 import wandb
 from torch.nn.utils import weight_norm
+from torch.nn.utils import spectral_norm as SN
 
 class Chomp1d(nn.Module):
     def __init__(self, chomp_size):
@@ -26,16 +27,25 @@ class Chomp1d(nn.Module):
 
 
 class TemporalBlock(nn.Module):
-    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, padding, dropout=0.2):
+    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, padding, dropout=0.2, spectral_norm = True):
         super(TemporalBlock, self).__init__()
-        self.conv1 = weight_norm(nn.Conv1d(n_inputs, n_outputs, kernel_size,
+        if(spectral_norm):
+            self.conv1 = SN(nn.Conv1d(n_inputs, n_outputs, kernel_size,
+                                           stride=stride, padding=padding, dilation=dilation))
+        else:
+            self.conv1 = weight_norm(nn.Conv1d(n_inputs, n_outputs, kernel_size,
                                            stride=stride, padding=padding, dilation=dilation))
         self.chomp1 = Chomp1d(padding)
         self.relu1 = nn.ReLU()
         self.dropout1 = nn.Dropout(dropout)
 
-        self.conv2 = weight_norm(nn.Conv1d(n_outputs, n_outputs, kernel_size,
+        if(spectral_norm):
+            self.conv2 = SN(nn.Conv1d(n_outputs, n_outputs, kernel_size,
                                            stride=stride, padding=padding, dilation=dilation))
+        else:
+            self.conv2 = weight_norm(nn.Conv1d(n_outputs, n_outputs, kernel_size,
+                                           stride=stride, padding=padding, dilation=dilation))
+
         self.chomp2 = Chomp1d(padding)
         self.relu2 = nn.ReLU()
         self.dropout2 = nn.Dropout(dropout)
@@ -75,6 +85,9 @@ class TemporalConvNet(nn.Module):
     
         self.lr_schedule = self.config.getboolean("training", "lr_schedule")
 
+        self.input_lip = config.getfloat('model', 'input_lipschitz')
+        self.hidden_lip = config.getfloat('model', 'hidden_lipschitz')
+
         self.model_name = '{}{}'.format(config['model']['name'], config['model']['config_id'])
         
         self.num_channels = json.loads(config.get("tcn", "n_channels"))
@@ -88,22 +101,40 @@ class TemporalConvNet(nn.Module):
         layers = []
         num_levels = len(self.num_channels)
 
-        for i in range(num_levels):
-            dilation_size = 2 ** i
-            in_channels = self.n_input if i == 0 else self.num_channels[i-1]
-            out_channels = self.num_channels[i]
-            self.l_out_tcn = int((self.l_out_tcn-1)/dilation_size) + 1
-            layers += [TemporalBlock(in_channels, out_channels, self.kernel_size, stride=1, dilation=dilation_size,
-                                     padding=(self.kernel_size-1) * dilation_size, dropout=self.dropout)]
-                                    
-        self.linear_input_size = self.num_channels[num_levels-1]*self.seqeunce_length
+        if(self.config.getboolean("model", "spectral_normalization")):
+            for i in range(num_levels):
+                dilation_size = 2 ** i
+                in_channels = self.n_input if i == 0 else self.num_channels[i-1]
+                out_channels = self.num_channels[i]
+                self.l_out_tcn = int((self.l_out_tcn-1)/dilation_size) + 1
+                layers += [(TemporalBlock(in_channels, out_channels, self.kernel_size, stride=1, dilation=dilation_size,
+                                        padding=(self.kernel_size-1) * dilation_size, dropout=self.dropout, spectral_norm=True))]
+                                        
+            self.linear_input_size = self.num_channels[num_levels-1]*self.seqeunce_length
 
-        self.network = nn.Sequential(*layers)
-        self.linear = nn.Sequential(
-            nn.Linear(self.linear_input_size, self.config.getint("model", "hidden_size")),
-            nn.Tanh(),
-            nn.Linear(self.config.getint("model", "hidden_size"), self.n_output)
-            )
+            self.network = nn.Sequential(*layers)
+            self.linear = nn.Sequential(
+                SN(nn.Linear(self.linear_input_size, self.config.getint("model", "hidden_size"))),
+                nn.Tanh(),
+                SN(nn.Linear(self.config.getint("model", "hidden_size"), self.n_output))
+                )
+        else:
+            for i in range(num_levels):
+                dilation_size = 2 ** i
+                in_channels = self.n_input if i == 0 else self.num_channels[i-1]
+                out_channels = self.num_channels[i]
+                self.l_out_tcn = int((self.l_out_tcn-1)/dilation_size) + 1
+                layers += [TemporalBlock(in_channels, out_channels, self.kernel_size, stride=1, dilation=dilation_size,
+                                        padding=(self.kernel_size-1) * dilation_size, dropout=self.dropout, spectral_norm=False)]
+                                        
+            self.linear_input_size = self.num_channels[num_levels-1]*self.seqeunce_length
+
+            self.network = nn.Sequential(*layers)
+            self.linear = nn.Sequential(
+                nn.Linear(self.linear_input_size, self.config.getint("model", "hidden_size")),
+                nn.Tanh(),
+                nn.Linear(self.config.getint("model", "hidden_size"), self.n_output)
+                )
 
         self.softplus = nn.Softplus()
 
@@ -114,13 +145,13 @@ class TemporalConvNet(nn.Module):
         )
 
     def forward(self, x):
-        tcn_out = self.network.forward(x)
+        tcn_out = self.network.forward(torch.mul(x,self.input_lip))
         tcn_out = torch.reshape(tcn_out, (-1, self.linear_input_size))
         predictions = self.linear(tcn_out)
         return predictions
 
     def forwardGaussian(self, x):
-        tcn_out = self.network.forward(x)
+        tcn_out = self.network.forward(torch.mul(x,self.input_lip))
         tcn_out = torch.reshape(tcn_out, (-1, self.linear_input_size))
         predictions = self.linear(tcn_out)
         mean = predictions[:, 0:int(self.n_output/2)]

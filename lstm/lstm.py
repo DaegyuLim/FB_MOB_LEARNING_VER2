@@ -12,6 +12,8 @@ from torch import nn
 from torch import optim
 from torch.optim.lr_scheduler import LinearLR
 from torch.nn import functional as F
+from torch.nn.utils import spectral_norm as SN
+
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 import wandb
 
@@ -36,6 +38,9 @@ class FrictionLSTM(nn.Module):
 
         self.lr_schedule = self.config.getboolean("training", "lr_schedule")
 
+        self.input_lip = config.getfloat('model', 'input_lipschitz')
+        self.hidden_lip = config.getfloat('model', 'hidden_lipschitz')
+
         self.model_name = '{}{}'.format(config['model']['name'], config['model']['config_id'])
         
         lstm_structure_config_dict = {'input_size': self.config.getint("data", "n_input_feature"),
@@ -46,8 +51,18 @@ class FrictionLSTM(nn.Module):
         'dropout': self.config.getfloat("model", "dropout"),
         'bidirectional': self.config.getboolean("model", "bidirectional")}
         
-        self.lstm = nn.LSTM(**lstm_structure_config_dict)
-        self.linear = nn.Linear(lstm_structure_config_dict["hidden_size"],self.config.getint("data", "n_output"))
+        if(self.config.getboolean("model", "spectral_normalization")):
+            self.lstm = SN(nn.LSTM(**lstm_structure_config_dict), name="weight_hh_l0")
+            self.lstm = SN(self.lstm, name="weight_ih_l0")
+            self.linear = SN(nn.Linear(lstm_structure_config_dict["hidden_size"],self.config.getint("data", "n_output")))
+
+            print("SN is applied")
+            print(self.lstm)
+            print(self.linear)
+        else:
+            self.lstm = nn.LSTM(**lstm_structure_config_dict)
+            self.linear = nn.Linear(lstm_structure_config_dict["hidden_size"],self.config.getint("data", "n_output"))
+        
         self.softplus = nn.Softplus()
 
         self._optim = optim.Adam(
@@ -69,14 +84,14 @@ class FrictionLSTM(nn.Module):
         return predictions, h_out, c_out
 
     def forwardGaussian(self, X):
-        lstm_out, _ = self.lstm(X)
+        lstm_out, _ = self.lstm(torch.mul(X,self.input_lip))
         predictions = self.linear(lstm_out[:,-1,:])
         mean = predictions[:, 0:int(self.n_output/2)]
         var = self.softplus(predictions[:, int(self.n_output/2):self.n_output]) # vars
         return mean, var
 
     def forwardGaussian2(self, X, h, c):
-        lstm_out, (h_out, c_out) = self.lstm(X, (h, c))
+        lstm_out, (h_out, c_out) = self.lstm(torch.mul(X,self.input_lip), (h, c))
         predictions = self.linear(lstm_out[:,-1,:])
         mean = predictions[:, 0:int(self.n_output/2)]
         var = self.softplus(predictions[:, int(self.n_output/2):self.n_output]) # vars
@@ -164,35 +179,35 @@ class FrictionLSTM(nn.Module):
         cnt = 0
 
         # free motion only test data
-        for inputs, outputs in testloader:
-            inputs = inputs.to(self._device)
-            outputs = outputs.to(self._device)
+        # for inputs, outputs in testloader:
+        #     inputs = inputs.to(self._device)
+        #     outputs = outputs.to(self._device)
             
-            if(self.config.getint("data", "seqeunce_length") == 1):
+        #     if(self.config.getint("data", "seqeunce_length") == 1):
 
-                mean, var, hidden, cell = self.forwardGaussian2(inputs, hidden, cell)
-            else:
-                mean, var = self.forwardGaussian(inputs)
+        #         mean, var, hidden, cell = self.forwardGaussian2(inputs, hidden, cell)
+        #     else:
+        #         mean, var = self.forwardGaussian(inputs)
 
-            cnt += 1
+        #     cnt += 1
 
-            # print("inputs.shape: ", inputs.shape)
-            # print("outputs.shape: ", outputs.shape)
-            # print("mean.shape: ", mean.shape)
-            # print("var.shape: ", var.shape)
-            # print("outputs.shape: ", outputs.shape) 
+        #     # print("inputs.shape: ", inputs.shape)
+        #     # print("outputs.shape: ", outputs.shape)
+        #     # print("mean.shape: ", mean.shape)
+        #     # print("var.shape: ", var.shape)
+        #     # print("outputs.shape: ", outputs.shape) 
 
-            test_loss = nn.GaussianNLLLoss()(mean, outputs, var)
-            temp = np.concatenate( (self._to_numpy(mean), self._to_numpy(var)), axis=1)
-            predictions.extend(temp)
-            residuals.extend(np.abs(self._to_numpy(mean)-self._to_numpy(outputs)))
-            test_losses.append(self._to_numpy(test_loss))
-        print("TEST count: ", cnt)
-        print("Test Loss: ", np.mean(test_losses)) 
-        print("inputs.shape: ", inputs.shape)
-        print("outputs.shape: ", outputs.shape)
+        #     test_loss = nn.GaussianNLLLoss()(mean, outputs, var)
+        #     temp = np.concatenate( (self._to_numpy(mean), self._to_numpy(var)), axis=1)
+        #     predictions.extend(temp)
+        #     residuals.extend(np.abs(self._to_numpy(mean)-self._to_numpy(outputs)))
+        #     test_losses.append(self._to_numpy(test_loss))
+        # print("TEST count: ", cnt)
+        # print("Test Loss: ", np.mean(test_losses)) 
+        # print("inputs.shape: ", inputs.shape)
+        # print("outputs.shape: ", outputs.shape)
         
-        np.savetxt(result_directory+"testing_result.csv", predictions, delimiter=",")
+        # np.savetxt(result_directory+"testing_result.csv", predictions, delimiter=",")
         
         # threshold
         # self.calculate_threshold_gaussian(testloader)

@@ -18,6 +18,7 @@ from mlp.mlp import CustomMLP
 from rnn.rnn import CustomRNN
 from tcn.tcn import TemporalConvNet
 from transformer.transformer import CustomTRANSFORMER
+from gru_pelvis.concat_network import CustomConcatPelv
 import wandb
 
 def argparser():
@@ -89,6 +90,9 @@ def run(config, trainloader, validatonloader, testloader, test_collision_loader=
     elif network_type == "TRANSFORMER":
         print('TRANSFORMER is used')
         nn_training = CustomTRANSFORMER(config, checkpoint_directory)
+    elif network_type == "PELVIS":
+        print('Concat PELVIS is used')
+        nn_training = CustomConcatPelv(config, checkpoint_directory)
     
     training_parameters = count_parameters(nn_training)
     print('number of model parameters: ', training_parameters)
@@ -109,6 +113,7 @@ def run(config, trainloader, validatonloader, testloader, test_collision_loader=
     if config.getboolean("print_weights", "print_weights") is True:
         nn_training.to('cpu')
 
+        # nn_training.print_parameters_as_txt()
         for name, param in nn_training.state_dict().items():
             file_name = "./result/weights/" + name + ".txt"
             np.savetxt(file_name, param.data)
@@ -119,7 +124,14 @@ if __name__ == '__main__':
     
     if config.getboolean("log", "wandb") is True:
         # wandb.init(project="TOCABI_REAL_DATA_FT_TORQUE_LEARNING", tensorboard=False)
-        wandb.init(project="PETER_new_data2_test", tensorboard=False)
+        # wandb.init(project="TRO simulation legs", name=config.get("log", "wandb_run_name"), tensorboard=False)
+        # wandb.init(project="TRO simulation upperbody", name=config.get("log", "wandb_run_name"), tensorboard=False)
+        # wandb.init(project="TRO exp legs", name=config.get("log", "wandb_run_name"), tensorboard=False)
+        # wandb.init(project="TRO exp upper body", name=config.get("log", "wandb_run_name"), tensorboard=False)
+        # wandb.init(project="Thesis exp", name=config.get("log", "wandb_run_name"), tensorboard=False)
+        wandb.init(project="IJRR revision wholebody model", name=config.get("log", "wandb_run_name"), tensorboard=False)
+
+        # wandb.init(project="TRO ablation study left leg", name=config.get("log", "wandb_run_name"), tensorboard=False)
         wandb_config_dict = dict()
         for section in config.sections():
             for key, value in config[section].items():
@@ -131,7 +143,7 @@ if __name__ == '__main__':
 
     data_seq_len = config.getint("data", "seqeunce_length")
     data_num_input_feat = config.getint("data", "n_input_feature")
-    data_num_output = config.getint("data", "n_output")
+    data_num_output = config.getint("data", "n_output_feature")
     network_type = config.get('model', 'network')
 
     train_data_file_name = config.get("paths", "train_data_file_name")

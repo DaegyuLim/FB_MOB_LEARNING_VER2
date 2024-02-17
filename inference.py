@@ -15,6 +15,7 @@ from mlp.mlp import CustomMLP
 from rnn.rnn import CustomRNN
 from tcn.tcn import TemporalConvNet
 from transformer.transformer import CustomTRANSFORMER
+from gru_pelvis.concat_network import CustomConcatPelv
 
 def argparser():
     """
@@ -44,8 +45,8 @@ def load_config(args):
     default_model_config_path = os.path.join(config['paths']['configs_directory'], default_model_config_filename)
     config.read(default_model_config_path)
 
-    config.set('device', 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
-    #config.set('device', 'device', 'cpu')
+    # config.set('device', 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    config.set('device', 'device', 'cpu')
 
     return config
 
@@ -82,7 +83,10 @@ def run(config, testloader, test_collision_loader, devloader=None):
     elif network_type == "TRANSFORMER":
         print('TRANSFORMER is used')
         nn_training = CustomTRANSFORMER(config, checkpoint_directory)
- 
+    elif network_type == "PELVIS":
+        print('Concat PELVIS is used')
+        nn_training = CustomConcatPelv(config, checkpoint_directory)
+        
     nn_training.restore_model(config['paths']['checkpoints_restore_directory'])
     
     nn_training.to(config['device']['device'])
@@ -93,6 +97,7 @@ def run(config, testloader, test_collision_loader, devloader=None):
     if config.getboolean("print_weights", "print_weights") is True:
         nn_training.to('cpu')
 
+        # nn_training.print_parameters_as_txt()
         for name, param in nn_training.state_dict().items():
             file_name = "./result/weights/" + name + ".txt"
             np.savetxt(file_name, param.data)
@@ -117,18 +122,18 @@ if __name__ == '__main__':
         batch_size=config.getint("training", "batch_size"),
         shuffle=False,
         drop_last=False,
-        num_workers=12,
+        num_workers=0,
         pin_memory=False)
 
     test_collision_data_file_name = config.get("paths", "test_collision_data_file_name")
     test_collision_csv_path = os.path.join(data_dir, test_collision_data_file_name)
-    test_collision_data = FrictionDataset(test_collision_csv_path,seq_len=data_seq_len, n_input_feat=data_num_input_feat, n_output=data_num_output, network = network_type)
+    test_collision_data = FrictionDataset(test_collision_csv_path, seq_len=data_seq_len, n_input_feat=data_num_input_feat, n_output=data_num_output, network = network_type)
     test_collision_loader = DataLoader(
         test_collision_data,
         batch_size=1,
         shuffle=False,
         drop_last=False,
-        num_workers=12,
+        num_workers=0,
         pin_memory=False)
 
 

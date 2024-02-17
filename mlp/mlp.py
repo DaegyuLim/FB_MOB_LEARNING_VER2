@@ -12,6 +12,7 @@ from torch import nn
 from torch import optim
 from torch.optim.lr_scheduler import LinearLR
 from torch.nn import functional as F
+from torch.nn.utils import spectral_norm as SN
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 import wandb
 
@@ -36,6 +37,9 @@ class CustomMLP(nn.Module):
 
         self.lr_schedule = self.config.getboolean("training", "lr_schedule")
 
+        self.input_lip = config.getfloat('model', 'input_lipschitz')
+        self.hidden_lip = config.getfloat('model', 'hidden_lipschitz')
+
         self.model_name = '{}{}'.format(config['model']['name'], config['model']['config_id'])
         
         # gru_structure_config_dict = {'input_size': self.config.getint("data", "n_input_feature"),
@@ -45,17 +49,24 @@ class CustomMLP(nn.Module):
         # 'batch_first': self.config.getboolean("model", "batch_first"),
         # 'dropout': self.config.getint("model", "dropout"),
         # 'bidirectional': self.config.getboolean("model", "bidirectional")}
-        
-        self.mlp = nn.Sequential(
-            nn.Linear(self.config.getint("data", "n_input_feature"), self.config.getint("model", "hidden_size")),
-            nn.Tanh(),
-            nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("model", "hidden_size")),
-            nn.Tanh(),
-            nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("model", "hidden_size")),
-            nn.Tanh(),
-            nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("data", "n_output"))
-            )
-
+        if(self.config.getboolean("model", "spectral_normalization")):
+            self.mlp = nn.Sequential(
+                SN(nn.Linear(self.config.getint("data", "n_input_feature"), self.config.getint("model", "hidden_size"))),
+                nn.Tanh(),
+                # SN(nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("model", "hidden_size"))),
+                # nn.Tanh(),
+                SN(nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("data", "n_output")))
+                )
+            print("SN is applied")
+            print(self.mlp)
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(self.config.getint("data", "n_input_feature"), self.config.getint("model", "hidden_size")),
+                nn.Tanh(),
+                # nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("model", "hidden_size")),
+                # nn.Tanh(),
+                nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("data", "n_output"))
+                )
         # self.linear1 = nn.Linear(self.config.getint("data", "n_input_feature"), self.config.getint("model", "hidden_size"))
         # self.linear2 = nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("model", "hidden_size"))
         # self.linear3 = nn.Linear(self.config.getint("model", "hidden_size"), self.config.getint("data", "n_output"))
@@ -70,11 +81,11 @@ class CustomMLP(nn.Module):
         )
 
     def forward(self, X):
-        predictions = self.mlp(X)
+        predictions = self.mlp(torch.mul(X,self.input_lip))
         return predictions
 
     def forwardGaussian(self, X):
-        predictions = self.mlp(X)
+        predictions = self.mlp(torch.mul(X,self.input_lip))
         mean = predictions[:, 0:int(self.n_output/2)]
         var = self.softplus(predictions[:, int(self.n_output/2):self.n_output]) # vars
         return mean, var

@@ -16,7 +16,6 @@ from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_sc
 import wandb
 
 
-
 class CustomTRANSFORMER(nn.Module):
     """
     VAE, x --> mu, log_sigma_sq --> N(mu, log_sigma_sq) --> z --> x
